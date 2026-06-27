@@ -1,0 +1,85 @@
+---
+- name: Deploy Calculator API
+  hosts: application
+  gather_facts: false
+
+  vars:
+    container_name: app-server
+    repo_url: "https://github.com/devops-ensino/calculator-api.git"
+    app_dir: "/opt/calculator-api"
+
+  tasks:
+
+    - name: Instalar dependências
+      shell: |
+        docker exec {{ container_name }} bash -c "
+        apt-get update &&
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        openjdk-17-jdk \
+        maven \
+        git \
+        curl"
+      changed_when: true
+
+    - name: Remover versão anterior da aplicação
+      shell: |
+        docker exec {{ container_name }} rm -rf {{ app_dir }}
+      ignore_errors: true
+
+    - name: Clonar repositório
+      shell: |
+        docker exec {{ container_name }} git clone \
+        {{ repo_url }} \
+        {{ app_dir }}
+
+    - name: Compilar aplicação
+      shell: |
+        docker exec {{ container_name }} bash -c "
+        cd {{ app_dir }} &&
+        mvn clean package -DskipTests"
+
+    - name: Encerrar instância anterior
+      shell: |
+        docker exec {{ container_name }} bash -c "
+        pkill -f calculator-api || true"
+      failed_when: false
+      changed_when: false
+
+    - name: Iniciar aplicação
+      shell: |
+        docker exec -d {{ container_name }} bash -c "
+        cd {{ app_dir }} &&
+        java -jar target/calculator-api-1.0.0.jar \
+        > app.log 2>&1"
+
+    - name: Aguardar inicialização da API
+      pause:
+        seconds: 20
+
+    - name: Validar endpoint health
+      shell: |
+        docker exec {{ container_name }} \
+        curl -s http://localhost:8080/api/health
+      register: health_response
+
+    - name: Exibir resultado do health check
+      debug:
+        var: health_response.stdout
+
+    - name: Validar endpoint de soma
+      shell: |
+        docker exec {{ container_name }} \
+        curl -s \
+        "http://localhost:8080/api/calculator/add?a=10&b=20"
+      register: add_response
+
+    - name: Exibir resultado da soma
+      debug:
+        var: add_response.stdout
+
+    - name: Validar implantação
+      assert:
+        that:
+          - "'UP' in health_response.stdout"
+        fail_msg: "A aplicação não iniciou corretamente."
+        success_msg: "Aplicação implantada com sucesso."
